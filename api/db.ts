@@ -1,4 +1,3 @@
-import Database from 'better-sqlite3'
 import fs from 'fs'
 import path from 'path'
 import { put, list } from '@vercel/blob'
@@ -9,22 +8,6 @@ const isVercel = !!process.env.VERCEL
 const hasBlob = !!process.env.BLOB_READ_WRITE_TOKEN
 
 const baseDir = isVercel ? path.join('/tmp', 'favorites') : path.resolve(process.cwd(), 'server', 'data')
-fs.mkdirSync(baseDir, { recursive: true })
-const dbPath = path.join(baseDir, 'favorites.db')
-const db = new Database(dbPath)
-db.pragma('journal_mode = WAL')
-
-db.exec(`
-CREATE TABLE IF NOT EXISTS favorites_user (
-  user_id TEXT NOT NULL,
-  movie_id TEXT NOT NULL,
-  title TEXT NOT NULL,
-  poster_url TEXT NOT NULL,
-  created_at INTEGER DEFAULT (strftime('%s','now')),
-  PRIMARY KEY (user_id, movie_id)
-);
-CREATE INDEX IF NOT EXISTS idx_fav_user_created ON favorites_user(user_id, created_at DESC);
-`)
 
 const keyForUser = (userId: string) => `favorites/${userId}.json`
 
@@ -53,20 +36,51 @@ async function blobSaveFavorites(userId: string, items: Fav[]): Promise<void> {
   })
 }
 
-function sqliteListFavorites(userId: string): Fav[] {
+let sqliteDb: any | null = null
+async function ensureDb() {
+  if (sqliteDb) return sqliteDb
+  // Only initialize SQLite when not using Blob on Vercel
+  if (isVercel && hasBlob) {
+    throw new Error('SQLite disabled when Blob is configured on Vercel')
+  }
+  const DatabaseMod = await import('better-sqlite3')
+  fs.mkdirSync(baseDir, { recursive: true })
+  const dbPath = path.join(baseDir, 'favorites.db')
+  const Database = DatabaseMod.default as any
+  const db = new Database(dbPath)
+  db.pragma('journal_mode = WAL')
+  db.exec(`
+CREATE TABLE IF NOT EXISTS favorites_user (
+  user_id TEXT NOT NULL,
+  movie_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  poster_url TEXT NOT NULL,
+  created_at INTEGER DEFAULT (strftime('%s','now')),
+  PRIMARY KEY (user_id, movie_id)
+);
+CREATE INDEX IF NOT EXISTS idx_fav_user_created ON favorites_user(user_id, created_at DESC);
+`)
+  sqliteDb = db
+  return sqliteDb
+}
+
+async function sqliteListFavorites(userId: string): Promise<Fav[]> {
+  const db = await ensureDb()
   return db
     .prepare('SELECT movie_id AS movieId, title, poster_url AS posterUrl FROM favorites_user WHERE user_id = ? ORDER BY created_at DESC')
     .all(userId) as Fav[]
 }
 
-function sqliteAddFavorite(userId: string, f: Fav): void {
+async function sqliteAddFavorite(userId: string, f: Fav): Promise<void> {
+  const db = await ensureDb()
   const nowSec = Math.floor(Date.now() / 1000)
   db
     .prepare('INSERT INTO favorites_user (user_id, movie_id, title, poster_url, created_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(user_id, movie_id) DO UPDATE SET title=excluded.title, poster_url=excluded.poster_url, created_at=excluded.created_at')
     .run(userId, f.movieId, f.title, f.posterUrl, nowSec)
 }
 
-function sqliteRemoveFavorite(userId: string, id: string): void {
+async function sqliteRemoveFavorite(userId: string, id: string): Promise<void> {
+  const db = await ensureDb()
   db.prepare('DELETE FROM favorites_user WHERE user_id = ? AND movie_id = ?').run(userId, id)
 }
 
