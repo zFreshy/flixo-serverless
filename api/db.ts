@@ -5,12 +5,10 @@ import { kv } from '@vercel/kv'
 
 export type Fav = { movieId: string; title: string; posterUrl: string }
 
-// Determine environment and storage backend
 const isVercel = !!process.env.VERCEL
 const hasKV = !!(process.env.KV_REST_API_URL || process.env.KV_URL)
 
-// SQLite (dev/local) setup with per-user table
-const baseDir = path.resolve(process.cwd(), 'server', 'data')
+const baseDir = isVercel ? path.join('/tmp', 'favorites') : path.resolve(process.cwd(), 'server', 'data')
 fs.mkdirSync(baseDir, { recursive: true })
 const dbPath = path.join(baseDir, 'favorites.db')
 const db = new Database(dbPath)
@@ -28,7 +26,6 @@ CREATE TABLE IF NOT EXISTS favorites_user (
 CREATE INDEX IF NOT EXISTS idx_fav_user_created ON favorites_user(user_id, created_at DESC);
 `)
 
-// KV helpers (production)
 async function kvListFavorites(userId: string): Promise<Fav[]> {
   const raw = await kv.hgetall<Record<string, string>>(`favorites:${userId}`)
   if (!raw) return []
@@ -45,7 +42,6 @@ async function kvRemoveFavorite(userId: string, movieId: string): Promise<void> 
   await kv.hdel(`favorites:${userId}` as any, movieId as any)
 }
 
-// SQLite helpers (dev)
 function sqliteListFavorites(userId: string): Fav[] {
   return db
     .prepare('SELECT movie_id AS movieId, title, poster_url AS posterUrl FROM favorites_user WHERE user_id = ? ORDER BY created_at DESC')
@@ -63,7 +59,6 @@ function sqliteRemoveFavorite(userId: string, id: string): void {
   db.prepare('DELETE FROM favorites_user WHERE user_id = ? AND movie_id = ?').run(userId, id)
 }
 
-// Public API selecting backend
 export async function listFavorites(userId: string): Promise<Fav[]> {
   if (isVercel && hasKV) return kvListFavorites(userId)
   return sqliteListFavorites(userId)
