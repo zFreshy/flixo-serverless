@@ -33,13 +33,13 @@ async function blobSaveFavorites(userId: string, items: Fav[]): Promise<void> {
     contentType: 'application/json',
     access: 'public',
     token: process.env.BLOB_READ_WRITE_TOKEN,
+    allowOverwrite: true,
   })
 }
 
 let sqliteDb: any | null = null
 async function ensureDb() {
   if (sqliteDb) return sqliteDb
-  // Only initialize SQLite when not using Blob on Vercel
   if (isVercel && hasBlob) {
     throw new Error('SQLite disabled when Blob is configured on Vercel')
   }
