@@ -1,20 +1,29 @@
 import { z } from 'zod'
 import { listFavorites, addFavorite, type Fav } from './db'
 
+function allowCors(req: any, res: any, methods: string) {
+  const origin = req.headers?.origin || '*'
+  res.setHeader('Access-Control-Allow-Origin', origin)
+  res.setHeader('Access-Control-Allow-Methods', methods)
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
+}
+
 async function parseJsonBody(req: any): Promise<any> {
   if (req.body) {
-    if (typeof req.body === 'string') {
-      try { return JSON.parse(req.body) } catch { return {} }
-    }
-    return req.body
+    try {
+      return typeof req.body === 'string' ? JSON.parse(req.body) : req.body
+    } catch {}
   }
   const chunks: Buffer[] = []
   for await (const chunk of req as AsyncIterable<Buffer | string>) {
     chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk)
   }
   const raw = Buffer.concat(chunks).toString('utf-8')
-  if (!raw) return {}
-  try { return JSON.parse(raw) } catch { return {} }
+  try {
+    return JSON.parse(raw || '{}')
+  } catch {
+    return {}
+  }
 }
 
 const FavSchema = z.object({
@@ -24,6 +33,12 @@ const FavSchema = z.object({
 })
 
 export default async function handler(req: any, res: any) {
+  allowCors(req, res, 'GET, POST, OPTIONS')
+
+  if (req.method === 'OPTIONS') {
+    return res.status(204).end()
+  }
+
   if (req.method === 'GET') {
     const items = listFavorites()
     return res.status(200).json(items)
@@ -39,6 +54,6 @@ export default async function handler(req: any, res: any) {
     return res.status(201).json({ ok: true })
   }
 
-  res.setHeader('Allow', 'GET, POST')
+  res.setHeader('Allow', 'GET, POST, OPTIONS')
   return res.status(405).json({ error: 'Method Not Allowed' })
 }
