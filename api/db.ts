@@ -1,11 +1,13 @@
 import fs from 'fs'
 import path from 'path'
 import { put, list } from '@vercel/blob'
+import { kv } from '@vercel/kv'
 
 export type Fav = { movieId: string; title: string; posterUrl: string }
 
 const isVercel = !!process.env.VERCEL
 const hasBlob = !!process.env.BLOB_READ_WRITE_TOKEN
+const hasKV = !!process.env.KV_REST_API_URL && !!process.env.KV_REST_API_TOKEN
 
 const baseDir = isVercel ? path.join('/tmp', 'favorites') : path.resolve(process.cwd(), 'server', 'data')
 
@@ -17,7 +19,9 @@ async function blobListFavorites(userId: string): Promise<Fav[]> {
     const { blobs } = await list({ prefix: key, token: process.env.BLOB_READ_WRITE_TOKEN })
     if (!blobs || blobs.length === 0) return []
     const latest = blobs.sort((a, b) => (a.uploadedAt < b.uploadedAt ? 1 : -1))[0]
-    const res = await fetch(latest.url)
+    const u = new URL(latest.url)
+    u.searchParams.set('ts', String(Date.now()))
+    const res = await fetch(u.toString(), { cache: 'no-store' })
     if (!res.ok) return []
     const json = await res.json().catch(() => null)
     if (!Array.isArray(json)) return []
@@ -35,6 +39,21 @@ async function blobSaveFavorites(userId: string, items: Fav[]): Promise<void> {
     token: process.env.BLOB_READ_WRITE_TOKEN,
     allowOverwrite: true,
   })
+}
+
+const kvKeyForUser = (userId: string) => `fav:${userId}`
+
+async function kvListFavorites(userId: string): Promise<Fav[]> {
+  try {
+    const data = await kv.get<Fav[]>(kvKeyForUser(userId))
+    return Array.isArray(data) ? data : []
+  } catch {
+    return []
+  }
+}
+
+async function kvSaveFavorites(userId: string, items: Fav[]): Promise<void> {
+  await kv.set(kvKeyForUser(userId), items)
 }
 
 let sqliteDb: any | null = null
@@ -85,11 +104,19 @@ async function sqliteRemoveFavorite(userId: string, id: string): Promise<void> {
 }
 
 export async function listFavorites(userId: string): Promise<Fav[]> {
+  if (isVercel && hasKV) return kvListFavorites(userId)
   if (isVercel && hasBlob) return blobListFavorites(userId)
   return sqliteListFavorites(userId)
 }
 
 export async function addFavorite(userId: string, f: Fav): Promise<void> {
+  if (isVercel && hasKV) {
+    const current = await kvListFavorites(userId)
+    const idx = current.findIndex(i => i.movieId === f.movieId)
+    if (idx >= 0) current[idx] = f; else current.push(f)
+    await kvSaveFavorites(userId, current)
+    return
+  }
   if (isVercel && hasBlob) {
     const current = await blobListFavorites(userId)
     const idx = current.findIndex(i => i.movieId === f.movieId)
@@ -101,6 +128,12 @@ export async function addFavorite(userId: string, f: Fav): Promise<void> {
 }
 
 export async function removeFavorite(userId: string, id: string): Promise<void> {
+  if (isVercel && hasKV) {
+    const current = await kvListFavorites(userId)
+    const next = current.filter(i => i.movieId !== id)
+    await kvSaveFavorites(userId, next)
+    return
+  }
   if (isVercel && hasBlob) {
     const current = await blobListFavorites(userId)
     const next = current.filter(i => i.movieId !== id)
